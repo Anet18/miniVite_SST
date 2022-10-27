@@ -302,6 +302,7 @@ class LCG
         std::vector<GraphElem> rnums_;
 };
 
+/*
 // locks
 #ifdef USE_OPENMP_LOCK
 #else
@@ -327,5 +328,6 @@ void unlock() {
 #endif
 }
 #endif
-
+*/
 #endif // UTILS
+

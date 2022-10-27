@@ -50,7 +50,8 @@
 #include <climits>
 #include <array>
 #include <unordered_map>
-
+#include <fcntl.h>
+#include <unistd.h>
 #include <mpi.h>
 
 #include "utils.hpp"
@@ -168,7 +169,7 @@ class Graph
         {
             const std::vector<GraphElem>::const_iterator iter = 
                 std::upper_bound(parts_.begin(), parts_.end(), vertex);
-
+            //std::cout<<"owner = "<<iter-parts_.begin()-1<<std::endl;
             return (iter - parts_.begin() - 1);
         }
 
@@ -312,6 +313,7 @@ class BinaryEdgeList
         {}
         
         // read a file and return a graph
+        /*
         Graph* read(int me, int nprocs, int ranks_per_node, std::string file)
         {
             int file_open_error;
@@ -377,6 +379,7 @@ class BinaryEdgeList
             }    
 
             N_local_ = g->edge_indices_[M_local_] - g->edge_indices_[0];
+            printf("%d\n",N_local_);
             g->set_nedges(N_local_);
 
             tot_bytes = N_local_*(sizeof(Edge));
@@ -410,6 +413,119 @@ class BinaryEdgeList
 
             return g;
         }
+        */
+       
+
+         Graph* read1(int me, int nprocs, int ranks_per_node, std::string file)
+        {
+            int file_open_error;
+            //MPI_File fh;
+            MPI_Status status;
+            int fh1;
+            // specify the number of aggregates
+            //#if !defined(SSTMAC)
+            //printf("AAAA\n");
+            //MPI_Info info;
+            //MPI_Info_create(&info);
+            int naggr = (ranks_per_node > 1) ? (nprocs/ranks_per_node) : ranks_per_node;
+            if (naggr >= nprocs)
+                naggr = 1;
+            std::stringstream tmp_str;
+            tmp_str << naggr;
+            std::string str = tmp_str.str();
+            //MPI_Info_set(info, "cb_nodes", str.c_str());
+            //printf("test\n");
+            //file_open_error = MPI_File_open(comm_, file.c_str(), MPI_MODE_RDONLY, info, &fh);
+             fh1 = open(file.c_str(),O_RDONLY);
+            //MPI_Info_free(&info);
+            //#else
+             //printf("test1\n");
+            //file_open_error = MPI_File_open(comm_, file.c_str(), MPI_MODE_RDONLY, MPI_INFO_NULL, &fh);
+            //#endif
+            if (fh1 == -1)
+            {
+                std::cout << " Error opening file! " << std::endl;
+                MPI_Abort(comm_, -99);
+            }
+
+            // read the dimensions
+            //MPI_File_read_all(fh, &M_, sizeof(GraphElem), MPI_BYTE, &status);
+            //MPI_File_read_all(fh, &N_, sizeof(GraphElem), MPI_BYTE, &status);
+            ssize_t sz = read(fh1,&M_,sizeof(GraphElem));
+            ssize_t sz1 = read(fh1,&N_,sizeof(GraphElem));
+            M_local_ = ((M_*(me + 1)) / nprocs) - ((M_*me) / nprocs);
+
+            // create local graph
+            //printf("M_local_ M_ N_ %d %d %d\n",M_local_,M_,N_);
+            Graph *g = new Graph(M_local_, 0, M_, N_);
+            //g->print();
+            // Let N = array length and P = number of processors.
+            // From j = 0 to P-1,
+            // Starting point of array on processor j = floor(N * j / P)
+            // Length of array on processor j = floor(N * (j + 1) / P) - floor(N * j / P)
+
+            uint64_t tot_bytes=(M_local_+1)*sizeof(GraphElem);
+            MPI_Offset offset = 2*sizeof(GraphElem) + ((M_*me) / nprocs)*sizeof(GraphElem);
+            if (tot_bytes < INT_MAX){
+                //MPI_File_read_at(fh, offset, &g->edge_indices_[0], tot_bytes, MPI_BYTE, &status);
+                ssize_t sz2 = pread(fh1,&g->edge_indices_[0],tot_bytes,offset);
+            }
+            else
+            {
+                int chunk_bytes=INT_MAX;
+                uint8_t *curr_pointer = (uint8_t*) &g->edge_indices_[0];
+                uint64_t transf_bytes = 0;
+
+                while (transf_bytes < tot_bytes)
+                {
+                    //MPI_File_read_at(fh, offset, curr_pointer, chunk_bytes, MPI_BYTE, &status);
+                     ssize_t sz3 = pread(fh1, curr_pointer,chunk_bytes,offset);
+                    transf_bytes += chunk_bytes;
+                    offset += chunk_bytes;
+                    curr_pointer += chunk_bytes;
+                    if ((tot_bytes - transf_bytes) < INT_MAX)
+                        chunk_bytes = tot_bytes - transf_bytes;
+                }
+            }
+
+            N_local_ = g->edge_indices_[M_local_] - g->edge_indices_[0];
+            g->set_nedges(N_local_);
+
+            tot_bytes = N_local_*(sizeof(Edge));
+            offset = 2*sizeof(GraphElem) + (M_+1)*sizeof(GraphElem) + g->edge_indices_[0]*(sizeof(Edge));
+
+            if (tot_bytes < INT_MAX){
+                //MPI_File_read_at(fh, offset, &g->edge_list_[0], tot_bytes, MPI_BYTE, &status);
+                ssize_t sz4 = pread(fh1,&g->edge_list_[0],tot_bytes,offset);
+            }
+            else
+            {
+                int chunk_bytes=INT_MAX;
+                uint8_t *curr_pointer = (uint8_t*)&g->edge_list_[0];
+                uint64_t transf_bytes = 0;
+                while (transf_bytes < tot_bytes)
+                {
+                   // MPI_File_read_at(fh, offset, curr_pointer, chunk_bytes, MPI_BYTE, &status);
+                    ssize_t sz5 = pread(fh1, curr_pointer,chunk_bytes,offset);
+                    transf_bytes += chunk_bytes;
+                    offset += chunk_bytes;
+                    curr_pointer += chunk_bytes;
+
+                    if ((tot_bytes - transf_bytes) < INT_MAX)
+                        chunk_bytes = (tot_bytes - transf_bytes);
+                }
+            }
+
+            //MPI_File_close(&fh);
+            close(fh1);
+
+            for(GraphElem i=1;  i < M_local_+1; i++)
+                g->edge_indices_[i] -= g->edge_indices_[0];
+            g->edge_indices_[0] = 0;
+
+            return g;
+        } 
+  
 
         // find a distribution such that every 
         // process own equal number of edges (serial)
@@ -462,7 +578,8 @@ class BinaryEdgeList
         
         // read a file and return a graph
         // uses a balanced distribution
-        // (approximately equal #edges per process) 
+        // (approximately equal #edges per process)
+        /* 
         Graph* read_balanced(int me, int nprocs, int ranks_per_node, std::string file)
         {
             int file_open_error;
@@ -570,6 +687,136 @@ class BinaryEdgeList
 
             return g;
         }
+        */
+
+
+         Graph* read_balanced(int me, int nprocs, int ranks_per_node, std::string file)
+        {
+            int file_open_error;
+            //MPI_File fh;
+            int fh1;
+            MPI_Status status;
+            std::vector<GraphElem> mbins(nprocs+1,0);
+
+            // find #vertices per process such that 
+            // each process roughly owns equal #edges
+            if (me == 0)
+            {
+                //printf("Here me = %d\n",me);
+                find_balanced_num_edges(nprocs, file, mbins);
+                std::cout << "Trying to achieve equal edge distribution across processes." << std::endl;
+            }
+            MPI_Barrier(comm_);
+            MPI_Bcast(mbins.data(), nprocs+1, MPI_GRAPH_TYPE, 0, comm_);
+
+            // specify the number of aggregates
+            //#if !defined(SSTMAC)
+            //MPI_Info info;
+            //MPI_Info_create(&info);
+            int naggr = (ranks_per_node > 1) ? (nprocs/ranks_per_node) : ranks_per_node;
+            if (naggr >= nprocs)
+                naggr = 1;
+            std::stringstream tmp_str;
+            tmp_str << naggr;
+            std::string str = tmp_str.str();
+            //MPI_Info_set(info, "cb_nodes", str.c_str());
+
+            //file_open_error = MPI_File_open(comm_, file.c_str(), MPI_MODE_RDONLY, info, &fh);
+              fh1 = open(file.c_str(),O_RDONLY);
+ 
+            //MPI_Info_free(&info);
+            //#else
+            //file_open_error = MPI_File_open(comm_, file.c_str(), MPI_MODE_RDONLY, MPI_INFO_NULL, &fh); 
+            //#endif
+
+            if (fh1 == -1) 
+            {
+                std::cout << " Error opening file! " << std::endl;
+                MPI_Abort(comm_, -99);
+            }
+
+            // read the dimensions 
+            //MPI_File_read_all(fh, &M_, sizeof(GraphElem), MPI_BYTE, &status);
+            //MPI_File_read_all(fh, &N_, sizeof(GraphElem), MPI_BYTE, &status);
+              ssize_t sz = read(fh1,&M_,sizeof(GraphElem));
+              ssize_t sz1 = read(fh1,&N_,sizeof(GraphElem));
+            M_local_ = mbins[me+1] - mbins[me];
+            //printf("Graph = %d %d %d %d %d %d\n",me,mbins[me+1],mbins[me],M_local_,M_,N_);
+            // create local graph
+            Graph *g = new Graph(M_local_, 0, M_, N_);
+            //g->print(true);
+            // readjust parts with new vertex partition
+            g->repart(mbins);
+
+            uint64_t tot_bytes=(M_local_+1)*sizeof(GraphElem);
+            MPI_Offset offset = 2*sizeof(GraphElem) + mbins[me]*sizeof(GraphElem);
+
+            // read in INT_MAX increments if total byte size is > INT_MAX
+            if (tot_bytes < INT_MAX){
+                //MPI_File_read_at(fh, offset, &g->edge_indices_[0], tot_bytes, MPI_BYTE, &status);
+                  ssize_t sz2 = pread(fh1,&g->edge_indices_[0],tot_bytes,offset);
+                //printf("Offset1 = %d tot_bytes= %d\n");
+                }
+            else 
+            {
+                int chunk_bytes=INT_MAX;
+                uint8_t *curr_pointer = (uint8_t*) &g->edge_indices_[0];
+                uint64_t transf_bytes = 0;
+
+                while (transf_bytes < tot_bytes)
+                {
+                    //MPI_File_read_at(fh, offset, curr_pointer, chunk_bytes, MPI_BYTE, &status);
+                     ssize_t sz3 = pread(fh1,curr_pointer,chunk_bytes,offset);
+                    transf_bytes += chunk_bytes;
+                    offset += chunk_bytes;
+                    curr_pointer += chunk_bytes;
+
+                    if ((tot_bytes - transf_bytes) < INT_MAX)
+                        chunk_bytes = tot_bytes - transf_bytes;
+                } 
+            }    
+
+            N_local_ = g->edge_indices_[M_local_] - g->edge_indices_[0];
+            g->set_nedges(N_local_);
+
+            tot_bytes = N_local_*(sizeof(Edge));
+            offset = 2*sizeof(GraphElem) + (M_+1)*sizeof(GraphElem) + g->edge_indices_[0]*(sizeof(Edge));
+
+            if (tot_bytes < INT_MAX){
+                //MPI_File_read_at(fh, offset, &g->edge_list_[0], tot_bytes, MPI_BYTE, &status);
+                  ssize_t sz4 = pread(fh1,&g->edge_list_[0],tot_bytes,offset);
+            }
+            else 
+            {
+                int chunk_bytes=INT_MAX;
+                uint8_t *curr_pointer = (uint8_t*)&g->edge_list_[0];
+                uint64_t transf_bytes = 0;
+
+                while (transf_bytes < tot_bytes)
+                {
+                    //MPI_File_read_at(fh, offset, curr_pointer, chunk_bytes, MPI_BYTE, &status);
+                    ssize_t sz5 = pread(fh1,curr_pointer,chunk_bytes,offset);
+                    transf_bytes += chunk_bytes;
+                    offset += chunk_bytes;
+                    curr_pointer += chunk_bytes;
+
+                    if ((tot_bytes - transf_bytes) < INT_MAX)
+                        chunk_bytes = (tot_bytes - transf_bytes);
+                } 
+            }    
+
+            close(fh1);
+
+            for(GraphElem i=1;  i < M_local_+1; i++)
+                g->edge_indices_[i] -= g->edge_indices_[0];   
+            g->edge_indices_[0] = 0;
+
+            mbins.clear();
+
+            return g;
+        }
+
+
 
     private:
         GraphElem M_;

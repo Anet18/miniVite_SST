@@ -51,12 +51,15 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <map>
+#include <pthread.h>
 
 #include <mpi.h>
 #include <omp.h>
 
 #include "graph.hpp"
 #include "utils.hpp"
+
+pthread_mutex_t lock;
 
 struct Comm {
   GraphElem size;
@@ -1129,7 +1132,8 @@ void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
 #ifdef USE_OPENMP_LOCK
 #pragma omp parallel default(shared), shared(dg, locks, parray), firstprivate(me)
 #else
-#pragma omp parallel default(shared), shared(dg, parray), firstprivate(me)
+//#pragma omp parallel default(shared), shared(dg, parray), firstprivate(me)
+#pragma sst compute default(shared), shared(dg, parray), firstprivate(me)
 #endif
   {
 #ifdef OMP_SCHEDULE_RUNTIME
@@ -1147,17 +1151,11 @@ void exchangeVertexReqs(const Graph &dg, size_t &ssz, size_t &rsz,
 	const int tproc = dg.get_owner(edge.tail_);
 
 	if (tproc != me) {
-#ifdef USE_OPENMP_LOCK
-	  omp_set_lock(&locks[tproc]);
-#else
-          lock();
-#endif
+
+          pthread_mutex_lock(&lock);
 	  parray[tproc].insert(edge.tail_);
-#ifdef USE_OPENMP_LOCK
-	  omp_unset_lock(&locks[tproc]);
-#else
-          unlock();
-#endif
+          pthread_mutex_unlock(&lock);
+
 	}
       }
     }
