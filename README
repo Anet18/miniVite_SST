@@ -3,7 +3,7 @@ miniVite (/mini/ˈviːte/)
 ***********************
 
 *********************************
-Changes added on original version
+Changes to the original version
 1. Replaced all MPI File I/O by POSIX File I/O
 2. Made all global variables of main.cpp local variables
 3. Replaces lock() and unlock() by Pthread mutex lock and unlock
